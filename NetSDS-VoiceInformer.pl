@@ -38,16 +38,105 @@ NetSDSVoiceInformer->run(
 
 package NetSDSVoiceInformer;
 
-use lib '~rad/git/NetSDS-Conference/lib/';  
+use lib '/Users/rad/git/perl-NetSDS/NetSDS/lib'; 
+use lib '/Users/rad/git/perl-NetSDS-Util/NetSDS-Util/lib/'; 
 
 use base 'NetSDS::App'; 
 
-sub start { 
-	my $this = shift; 
+use Data::Dumper;
+use NetSDS::AutoInformator; 
 
-  warn Dumper ($this->{conf}); 
+# Start 
+# У нас есть N целей. Для каждой из них надо создать свой процесс. 
+
+my @children; 
+
+sub start { 
+	my $this = shift;
+  #warn Dumper ($this->{conf}); 
+  # Для каждой цели запускаем свой процесс. 
+	foreach my $target_name ( keys %{ $this->{conf}->{'targets'} } ) {  
+		 my $target = $this->{conf}->{'targets'}->{$target_name}; 
+		 # warn Dumper ($target);
+		 my $is_target_correct = $this->is_target_correct($target, $target_name); 
+		 unless ( defined ($is_target_correct ) ) { 
+		 	$this->speak("[$$] The target called '".$target_name."' with these parameters is incorrect. Please RTFM! Ignoring it. "); 
+			$this->speak("[$$] Parameters dump: " . Dumper ($target) ); 
+			next;
+		 }
+		 my $child = $this->burn_child ($target, $target_name, $this->{conf});
+		 push @children, $child; 
+  } 
 
 } 
+
+sub burn_child { 
+	my ($this, $target, $target_name, $conf) = @_; 
+  
+  my $pid = fork();
+	unless ( defined($pid) ) {
+  	die "Fork failed: $! \n"; 
+  }
+
+  if ($pid == 0) { 
+		# This is a child. 
+		my $ai = NetSDS::AutoInformator->new (
+			target => $target, 
+			tname => $target_name, 
+			conf => $conf
+		);
+
+		my $ai_started = $ai->start();
+		unless ( defined ( $ai_started ) ) { 
+			exit; 
+		} 
+		$ai->run(); 
+		$ai->stop();
+		exit; 
+	} 
+  
+	return $pid; 
+
+}
+
+=item B<is_target_correct> 
+
+ This method checks given target for all required parameters. Like dsn, context, table. 
+
+=cut 
+sub is_target_correct { 
+	my ($this, $target, $target_name) = @_; 
+
+  unless ( defined ( $target->{'context'} ) ) { 
+		$this->speak ("[$$] The target '".$target_name."' does not have any context."); 
+    return undef; 
+	}
+
+	unless ( defined ( $target->{'dsn'} ) ) { 
+		$this->speak ("[$$] The target '".$target_name."' does not have DSN "); 
+		return undef; 
+	} 
+
+	unless ( defined ( $target->{'login'} ) ) { 	
+		$this->speak ("[$$] The target '".$target_name."' does not have login "); 
+		return undef 
+	}
+
+	unless ( defined ( $target->{'passwd'} ) ) { 	
+		$this->speak ("[$$] The target '".$target_name."' does not have passwd "); 
+		return undef 
+	}
+
+
+
+
+	unless ( defined ( $target->{'table'} ) ) { 
+		$this->speak ("[$$] The target '".$target_name."' does not have TABLE name. "); 
+	  return undef; 
+	} 
+
+	return 1; 
+}
 
 # Ключевые слова для конфигурации 
 # 1. Максимальное количество параллельных звонков ( для автооповещения ). 
