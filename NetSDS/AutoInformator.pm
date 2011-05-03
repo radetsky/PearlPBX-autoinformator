@@ -10,6 +10,7 @@
 #      COMPANY:  Net.Style
 #      VERSION:  1.0
 #      CREATED:  04/25/11 15:09:44 EEST
+#LAST MODIFIED:  05/03/11 23:10:00 EEST 
 #===============================================================================
 =head1 NAME
 
@@ -36,6 +37,7 @@ use NetSDS::Asterisk::Originator;
 use NetSDS::Asterisk::EventListener; 
 use NetSDS::DBI; 
 use NetSDS::Logger; 
+use NetSDS::Util::String; 
 use Date::Manip; 
 use Carp; 
 use base qw(NetSDS::Class::Abstract);
@@ -63,6 +65,7 @@ sub new {
 	my ( $class, %params ) = @_;
 	
   my $this = $class->SUPER::new(%params);
+  $this->{'active_destinations'} = {}; 
 
 	return $this;
 
@@ -79,6 +82,9 @@ sub new {
 
 #-----------------------------------------------------------------------
 __PACKAGE__->mk_accessors('dbh');
+__PACKAGE__->mk_accessors('el'); # Event Listener 
+__PACKAGE__->mk_accessors('orig'); # Originator; 
+
 
 =item B<start> 
 
@@ -106,6 +112,7 @@ sub start {
 		dsn    => $dsn, 
     login  => $login, 
     passwd => $passwd,
+		attrs  =>  { RaiseError => 1, AutoCommit => 1 },
   ) ); 
 
   unless ( defined ( $this->dbh->{dbh} ) ) { 
@@ -144,6 +151,8 @@ sub start {
 	  die; 
   }
 
+  $this->el( $event_listener ) ; 
+
 	return 1; 
 
 };
@@ -157,17 +166,348 @@ sub start {
 sub run { 
   my $this = shift; 
   while (1) {
+		$this->log("info", "Begin cycle"); 
     my $is_allowed_time = $this->_is_allowed_time();  
 	  unless ( defined ( $is_allowed_time) ) { 
-			sleep(5); 
+			sleep(5);
+			next; 
 		}
     # Now it's allowed. Let's find parameters of target and get next N records; 
     my $next_records_count = $this->_get_next_records_count(); 
+	  unless ( defined ($next_records_count) ) { 
+			die; 
+		}
+		# We have next_records_count of next_records to make parallel calls. 
+	  # От максимального количества отнимаем то, что прямой сейчас звонит. 
+	
+	  if ( defined ($this->{'dialed'} ) ) { 
+			my $current_active_calls = keys @{ $this->{'dialed'} }; 
+			$next_records_count = $next_records_count - $current_active_calls; 
+			$this->log('info',"next_record_count ($next_records_count) - $current_active_calls"); 
+		}
 
+		# Prepared record is the arrayref of records as hashref
 
+		my $prepared_records = $this->_get_next_records ($next_records_count); 
+		unless ( defined ($prepared_records) ) { 
+			die; 
+		}
+		my $data_count = @{$prepared_records}; 
+		if ($data_count == 0) { 
+			$this->log("info","Sleeping 5 seconds"); 
+			sleep(5);
+			next; 
+		} 
+	  foreach my $record ( @{$prepared_records} ) { 
+			print "Make call to ".$record->{'id'}.":".$record->{'destination'}."\n"; 
+      my $dialed = $this->_fire ($record);
+			if ( $dialed ) { 
+				$this->{'dialed'}->{str_trim($record->{'destination'})} = $record->{'id'};
+			} 
+    }
+    # Reading Event Listener ; 
+	  while ( my $event = $this->el->_getEvent() ) { 
+			warn Dumper ($event);
+			unless ( defined ($event->{'Event'} ) ) { 
+				next; 
+			} 
+			if ($event->{'Event'} =~ /OriginateResponse/i ) { 
+				my $dst = $event->{'ActionID'}; 
+				if ($event->{'Response'} =~ /Failure/i ) { 
+					my $ch = $event->{'Channel'}; 
+				  $ch =~ s/\/$dst//g; 
+					$this->_dec_bt($ch);
+					$this->log("info","Dial to $dst failed.");
+					$this->_dial_failure( $dst ); 
+				}
+				if ($event->{'Response'} =~ /Success/i ) { 
+					my ($trunkname,$trunk_id) = split('-',$event->{'Channel'}); 
+				  $this->_dec_bt($trunkname); 
+				  $this->log("info","Dial to $dst success."); 
+					$this->_dial_success ( $dst ); 
+				} 
+
+			} 
+		}
+		sleep(1); 
+	  $this->log("info", "End of cycle"); 
   }
 	return 1; 
+}
+
+=item B<_dial_success> 
+
+	Update table to success state. Remove from memory by ID. 
+
+=cut 
+
+sub _dial_success { 
+	my $this = shift; 
+	my $destination = shift; 
+
+  my $id = $this->{'dialed'}->{$destination}; 
+
+  my $table = $this->{'target'}->{'table'}; 
+	my $strQuery = "update $table set done_date=now() where id=$id"; 
+	$this->dbh->call($strQuery); 
+
+  delete $this->{'dialed'}->{$destination}; 
+	
+	return 1; 
 } 
+
+
+sub _dial_failure { 
+	my $this = shift; 
+	my $destination = shift;  
+
+	delete $this->{'dialed'}->{$destination}; 
+
+  return 1; 
+}
+
+=item B<_fire> 
+
+ Make a call to destination 
+
+=cut 
+
+sub _fire {
+	my $this = shift; 
+	my $record = shift; 
+	
+	my $destination = str_trim( $record->{'destination'} ); 
+	my $id  = $record->{'id'};
+	my $context = $this->{'target'}->{'context'}; 
+	unless ( defined ( $context ) ) { 
+		$context = 'default'; 
+	} 
+
+ 	my $channel = $this->_find_channel($record->{'destination'}); 
+  unless ( defined ( $channel ) ) { 
+		$this->log("info","No free channel available for $destination. Skip it."); 
+		return undef; 
+	}
+  
+	warn Dumper ($channel); 
+
+	my $callerid = $channel->{'callerid'}; 
+	my $trunkname = $channel->{'trunkname'}; 
+
+  # Update table for current try; 
+	$this->_increment_tries($record); 
+
+  # Originate to: 
+	# destination 
+	# context 
+	# channel
+  my $orig = NetSDS::Asterisk::Originator->new(
+            actionid       => $destination,
+            destination    => $destination,
+            callerid       => $callerid,
+            return_context => $context,
+            variables      => '',
+            channel        => $trunkname.'/'.$destination);
+  
+  # Set Asterisk Parameters
+  my $astManagerHost   = $this->{conf}->{'asterisk'}->{'astManagerHost'};
+  my $astManagerPort   = $this->{conf}->{'asterisk'}->{'astManagerPort'};
+  my $astManagerUser   = $this->{conf}->{'asterisk'}->{'astManagerUser'};
+  my $astManagerSecret = $this->{conf}->{'asterisk'}->{'astManagerSecret'}; 
+
+  my $reply = $orig->originate(
+            $astManagerHost, $astManagerPort,
+            $astManagerUser, $astManagerSecret
+  );
+
+  unless ( defined($reply) ) {
+    $this->log( "warning", "Originate to $destination failed." );
+		$this->_dec_bt($trunkname); 
+    return undef; 
+  }
+
+  return 1; 
+}
+
+=item B<_dec_busy_trunks> 
+
+  dec busy_trunks->trunk_name,1; 
+
+=cut 
+
+sub _dec_bt { 
+	my $this = shift; 
+	my $trunkname = shift; 
+
+	my $busy_trunks = $this->{'busy_trunks'}->{$trunkname}; 
+  $busy_trunks = $busy_trunks - 1; 
+	$this->{'busy_trunks'}->{$trunkname} = $busy_trunks; 
+	$this->log( "info", "Decrease $trunkname busy_trunks to $busy_trunks"); 
+  return 1; 
+} 
+
+=item B<_find_channel> 
+
+We have tables routing, trunkgroups, trunks. 
+routing := prefix { callerid + trunk | trunkgroup }  
+
+-- Russian mode on --
+Конфигурационный раздел routing содержит таблицу маршрутизации по префиксам,
+префикс 
+  callerid 
+	trunk или trunkgroup 
+
+callerid = подставляемый callerid 
+trunkgroup = ссылка на имя транкгруппы 
+trunk = имя конкрентного транка 
+
+транкгруппа содержит список транков и количество каналов, соответствующее каждому транку, которое можно занять. 
+trunks содержит просто список транков и количество каналов, которое можно занять в этом транке 
+
+trunkgroup - это список транков и каналов к ним, которые перебираются по кругу при попытке найти свободный транк. 
+trunk - это просто транк, который мы выбираем для осуществления звонка с проверкой по занятости. 
+
+-- Russian mode off -- 
+
+=cut 
+
+sub _find_channel { 
+	my ($this,$destination) = @_; 
+
+  my $routing = $this->{'conf'}->{'routing'};
+	my $prefix = undef; 
+
+	foreach my $mask ( keys %{ $routing } ) { 
+		if ($destination =~ /^$mask/ ) { 
+			$prefix = $mask; 
+			last;
+		}
+	}
+	unless ( defined ($prefix) ) { 
+		$prefix = 'default'; 
+	} 
+
+	my $callerid = $routing->{$prefix}->{'callerid'}; 
+	unless ( defined ($callerid ) ) { 
+		$callerid = ""; 
+	} 
+	$this->log('info', "Selected route: ".$prefix. " with callerid=\'$callerid\'");  
+  my $trunkname = $this->_find_correspondent_trunk ($routing->{$prefix}); 
+  unless ( defined ($trunkname) ) { 
+		return undef; 
+	} 
+  return { callerid => $callerid, trunkname => $trunkname }; 
+}
+
+sub _find_correspondent_trunk { 
+	my ($this,$prefix) = @_; 
+
+  if ( defined ( $prefix->{'trunk'} ) ) { 
+		my $trunkname = $prefix->{'trunk'}; 
+		my $trunkmaxchannels = $this->{'conf'}->{'trunk'}->{$trunkname}; 
+		unless ( defined ( $trunkmaxchannels ) ) { 
+			$this->log('warning',"Can't find maxchannels for trunk $trunkname. Using maxchannels=1."); 
+			$trunkmaxchannels = 1; 
+		} 
+    my $busy_trunks = 0; 
+		unless ( defined ( $this->{'busy_trunks'}->{$trunkname} ) ) { 
+			$busy_trunks = 0; 
+		} else { 
+			$busy_trunks = $this->{'busy_trunks'}->{$trunkname};
+		} 
+		if ($busy_trunks >= $trunkmaxchannels ) { 
+			$this->log("info","Trunk $trunkname filled for maximum."); 
+			return undef; 
+		} 
+		$busy_trunks = $busy_trunks + 1; 
+    $this->{'busy_trunks'}->{$trunkname} = $busy_trunks;
+	 	$this->log("info","Selecting $trunkname. Incrementing busy_trunks to $busy_trunks."); 
+	  return $trunkname; 	
+ 	}
+ 
+	if ( defined ( $prefix->{'trunkgroup'} ) ) {
+	  my $trunkgroupname = $prefix->{'trunkgroup'}; 
+  	if ( defined ( $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname} ) ) { 
+			foreach my $trunkname ( keys %{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}} ) {  	
+		    my $trunkmaxchannels = $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}->{$trunkname}; 
+				unless ( defined ( $trunkmaxchannels ) or $trunkmaxchannels ) { 
+					$trunkmaxchannels = 1; 
+					$this->log('warning',"Can't find maxchannels for trunk $trunkname in trunkgroup $trunkgroupname. Using maxchannels=1.");
+				}
+		    my $busy_trunks = 0; 
+				unless ( defined ( $this->{'busy_trunks'}->{$trunkname} ) ) { 
+					$busy_trunks = 0; 
+				} else { 
+					$busy_trunks = $this->{'busy_trunks'}->{$trunkname};
+				} 
+				if ($busy_trunks >= $trunkmaxchannels ) { 
+					next; 
+				} else {
+					$this->log("info","Selecting $trunkname in trunkgroup $trunkgroupname. Incrementing busy_trunks to $busy_trunks."); 
+					$busy_trunks = $busy_trunks + 1; 
+    			$this->{'busy_trunks'}->{$trunkname} = $busy_trunks;
+					return $trunkname;  
+				}
+			}
+		} 
+  }
+
+  return undef 
+}
+
+sub _increment_tries { 
+	my $this = shift; 
+	my $record = shift; 
+
+	my $id = $record->{'id'}; 
+	my $table = $this->{'target'}->{'table'}; 
+  
+	$this->log("info","Increment tries for ".$record->{'id'}.":".$record->{'destination'}); 
+	my $strQuery = "update $table set when_last_try=now(), tries=tries+1 where id=$id";  
+	#$this->dbh->begin(); 
+	$this->dbh->call($strQuery); 
+	#$this->dbh->commit(); 
+	return 1; 
+}
+
+
+=item B<_get_next_records> 
+
+=cut
+
+sub _get_next_records {
+	my $this = shift; 
+	my $limit = shift; 
+
+  my $maxtries = $this->{'conf'}->{'max_tries_for_one_destination'}; 
+  unless ( defined ( $maxtries ) ) { 
+		$this->log("warning","Undefined max_tries_for_one_destination in config. Using 10."); 
+		$maxtries = 10; 
+	} 
+	my $strLimit = "limit $limit"; 
+	my $strWhere = $this->{'target'}->{'where'}; 
+ 
+  my $strTable = $this->{'target'}->{'table'}; 
+
+  my $strSelect = "select id, destination"; 
+	my $strQuery  = $strSelect . " from " . $strTable . " where done_date is null and (since < now() and till > now() ) and tries < $maxtries "; 
+ 
+  if ( defined ( $strWhere ) and $strWhere ne '') { 
+		$strQuery .= "and " . $strWhere;
+	} 
+  $strQuery .= "order by tries desc "; 
+  $strQuery .= $strLimit; 
+
+  my $data = $this->dbh->fetch_call($strQuery); 
+
+  my $data_count = @{$data};  
+	$this->log("info","Got $data_count records"); 
+
+  return $data; 
+	# returning array of array of hashrefs. 
+	# if it's empty returning [] (empty array); 
+
+}
 
 =item B<_get_next_records_count> 
 
@@ -175,7 +515,7 @@ sub run {
 
 =cut 
 
-sub _gext_next_records_count { 
+sub _get_next_records_count { 
 	my $this = shift; 
   unless ( defined ( $this->{target}->{'maxcalls'} ) ) { 
 		$this->log ("warning","maxcalls undefined. Epic Fail."); 
@@ -202,8 +542,19 @@ sub _gext_next_records_count {
 		return undef; 
 	} 
   return $maxcalls; 
-
 }
+=item B<_get_queue_free_operators> 
+
+
+=cut 
+sub _get_queue_free_operators { 
+	my $this = shift; 
+	my $queuename = shift; 
+
+	return 1; 
+} 
+
+
 =item B<_is_allowed_time>
 
   Check for allowed_time. When allowed time undefined allow to call any time. 

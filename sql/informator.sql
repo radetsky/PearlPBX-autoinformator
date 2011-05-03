@@ -33,6 +33,23 @@ CREATE TABLE predictive_dialing (
     till timestamp without time zone DEFAULT (now() + '1 day'::interval)
 );
 
+-- 
+-- id = primary key 
+-- destination = number to dial 
+-- create_date = when this record was made / inserted 
+-- done_date   = when dial to this number was success
+-- linked_with = operator who talked with this number 
+-- tries       = how many tries was did before dial to this number was success 
+-- billsec     = the length of talk with abonent 
+-- userfield   = use user information 
+-- uuid        = UUID of this record to get unique record whole very big time 
+-- when_last_try = the date/time of last try to dial 
+-- since       = since and till pair is the time period when we need to make call to 
+-- till        = this abonent 
+-- 
+-- You may extend this SQL schema to get better result. But please write a message to me 
+-- with patch to SQL and code and text file with idea 
+-- 
 
 ALTER TABLE public.predictive_dialing OWNER TO asterisk;
 

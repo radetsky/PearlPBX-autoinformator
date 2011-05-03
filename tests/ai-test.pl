@@ -37,16 +37,25 @@ my $ai = NetSDS::AutoInformator->new (
     login => 'asterisk',
     passwd => 'supersecret',
     table => 'predictive_dialing',
-    where => 'userfield like \'GROUP=1%\' order by id desc'
+    where => ''
   },
 conf => {
-  allowed_time => '9:00-21:00',
+  allowed_time => '9:00-23:00',
 	asterisk => { 
 		astManagerHost=>'192.168.1.98',
     astManagerPort=>'5038',
     astManagerUser => 'autoinformator',
     astManagerSecret => 'supersecret'
-	}
+	}, 
+  routing => { 
+		default => { 
+			callerid=>'3039338', 
+			trunk=>'SIP/telco',
+		},
+	},
+	trunk => { 
+		'SIP/telco' => 1, 
+	}, 
 }
 
 ); 
