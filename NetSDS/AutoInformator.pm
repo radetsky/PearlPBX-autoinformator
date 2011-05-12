@@ -172,11 +172,18 @@ sub run {
 			sleep(5);
 			next; 
 		}
+
     # Now it's allowed. Let's find parameters of target and get next N records; 
     my $next_records_count = $this->_get_next_records_count(); 
 	  unless ( defined ($next_records_count) ) { 
 			die; 
 		}
+		
+		unless ( $next_records_count ) { 
+			goto EventListen; 
+		} 
+		
+
 		# We have next_records_count of next_records to make parallel calls. 
 	  # От максимального количества отнимаем то, что прямой сейчас звонит. 
 	
@@ -187,24 +194,27 @@ sub run {
 		}
 
 		# Prepared record is the arrayref of records as hashref
-
-		my $prepared_records = $this->_get_next_records ($next_records_count); 
+   	my $prepared_records = $this->_get_next_records ($next_records_count); 
 		unless ( defined ($prepared_records) ) { 
 			die; 
 		}
 		my $data_count = @{$prepared_records}; 
 		if ($data_count == 0) { 
-			$this->log("info","Sleeping 5 seconds"); 
-			sleep(5);
-			next; 
+			$this->log("info","No data."); 
+			goto EventListen; 
 		} 
 	  foreach my $record ( @{$prepared_records} ) { 
-			print "Make call to ".$record->{'id'}.":".$record->{'destination'}."\n"; 
-      my $dialed = $this->_fire ($record);
-			if ( $dialed ) { 
+			$this->log("info","Make call to ".$record->{'id'}.":".$record->{'destination'}."\n"); 
+
+      my $dialed = $this->_fire($record);
+			if ( $dialed ) {
+			  # Заносим в анналы, что туда в destination мы звоним прямо сейчас.
 				$this->{'dialed'}->{str_trim($record->{'destination'})} = $record->{'id'};
 			} 
     }
+
+EventListen: 
+
     # Reading Event Listener ; 
 	  while ( my $event = $this->el->_getEvent() ) { 
 			warn Dumper ($event);
@@ -512,15 +522,20 @@ sub _get_next_records {
 =item B<_get_next_records_count> 
 
  Analyze the target parameters and find the correspondent count for next records
+ Анализирует параметры цели и пытается вычислить максимальное количество звонков параллельных.
 
 =cut 
 
 sub _get_next_records_count { 
-	my $this = shift; 
+
+  my $this = shift; 
   unless ( defined ( $this->{target}->{'maxcalls'} ) ) { 
 		$this->log ("warning","maxcalls undefined. Epic Fail."); 
 		return undef; 
-	} 
+	}
+  
+	# Если maxcalls =~ auto, то вычисляем auto. 
+
 	if ($this->{target}->{'maxcalls'} =~ /auto/i ) { 
 		if ( defined ( $this->{target}->{'queue'} ) ) { 
 			my $maxcalls = $this->_get_queue_free_operators ($this->{target}->{'queue'});
@@ -536,6 +551,7 @@ sub _get_next_records_count {
 		$this->log("warning","Maxcalls=auto but queue undefined."); 
 		return undef; 
 	}
+
   my $maxcalls = $this->{target}->{'maxcalls'}; 
 	unless ( $maxcalls ) { 
 		$this->log ("warning", "maxcalls must be > 0"); 
@@ -543,15 +559,87 @@ sub _get_next_records_count {
 	} 
   return $maxcalls; 
 }
+
 =item B<_get_queue_free_operators> 
 
+ Пытается получить кол-во свободных операторов в очереди.
 
 =cut 
 sub _get_queue_free_operators { 
+
 	my $this = shift; 
 	my $queuename = shift; 
 
-	return 1; 
+  # Set Asterisk Parameters
+  my $astManagerHost   = $this->{conf}->{'asterisk'}->{'astManagerHost'};
+  my $astManagerPort   = $this->{conf}->{'asterisk'}->{'astManagerPort'};
+  my $astManagerUser   = $this->{conf}->{'asterisk'}->{'astManagerUser'};
+  my $astManagerSecret = $this->{conf}->{'asterisk'}->{'astManagerSecret'}; 
+
+  my $astManager = NetSDS::Asterisk::Manager->new ( 
+		host 			=> $astManagerHost,
+		port			=> $astManagerPort,
+		username 	=> $astManagerUser,
+		secret	  => $astManagerSecret,
+		events	  => 'Off',
+	);
+
+	my $connected = $astManager->connect();
+	unless ( defined ( $connected ) ) { 
+		$this->log("warning","Can't connect to the asterisk: ".$astManager->geterror() ); 
+		return undef; 
+	} 
+
+  my $sent = $astManager->sendcommand( 'Action' => 'QueueStatus' );
+	unless ( defined($sent) ) {
+		$this->log("warning","Can't send the command QueueStatus: " .$astManager->geterror()  );
+		return undef;
+	}
+
+	my $reply = $astManager->receiveanswer();
+	unless ( defined($reply) ) {
+	  $this->log("warning","Can't receive the answer:" .$astManager->geterror() ); 
+		return undef;
+	}
+
+	my $status = $reply->{'Response'};
+	unless ( defined($status) ) {
+		$this->log("warning","Answer does not contain 'Response' field.");
+		return undef;
+	}
+
+  if ( $status ne 'Success' ) {
+		$this->log("warning","Response not success: ".$status );
+		return undef;
+	}
+
+  # reading from socket while did not receive Event: StatusComplete
+
+	my @replies;
+	while (1) {
+		my $reply  = $astManager->receiveanswer();
+		$status = $reply->{'Event'};
+		if ( $status eq 'QueueStatusComplete' ) {
+			last;
+		}
+		push @replies, $reply;
+	}
+
+  # warn Dumper (\@replies);
+
+  my $free_operators = 0; 
+  foreach my $reply (@replies) { 
+		if ($reply->{'Event'} =~ /QueueMember/) {
+			if ($reply->{'Queue'} eq $queuename) { 
+				if ($reply->{'Status'} == 1) { 
+					$free_operators = $free_operators + 1; 
+				}
+			}
+		}
+  }
+
+	return $free_operators; 
+	
 } 
 
 

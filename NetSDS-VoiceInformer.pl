@@ -48,16 +48,16 @@ use NetSDS::AutoInformator;
 
 # Start 
 # У нас есть N целей. Для каждой из них надо создать свой процесс. 
+# Master-Process остается в режиме ожидания. 
 
-my @children; 
+my @CHILDREN; 
 
 sub start { 
 	my $this = shift;
-  #warn Dumper ($this->{conf}); 
   # Для каждой цели запускаем свой процесс. 
 	foreach my $target_name ( keys %{ $this->{conf}->{'targets'} } ) {  
-		 my $target = $this->{conf}->{'targets'}->{$target_name}; 
-		 # warn Dumper ($target);
+		 my $target = $this->{conf}->{'targets'}->{$target_name};
+		 # Check the target for all correct parameters
 		 my $is_target_correct = $this->is_target_correct($target, $target_name); 
 		 unless ( defined ($is_target_correct ) ) { 
 		 	$this->speak("[$$] The target called '".$target_name."' with these parameters is incorrect. Please RTFM! Ignoring it. "); 
@@ -65,10 +65,38 @@ sub start {
 			next;
 		 }
 		 my $child = $this->burn_child ($target, $target_name, $this->{conf});
-		 push @children, $child; 
-  } 
+		 push @CHILDREN, $child; 
+  }
+	$this->_add_signal_handlers(); 
 
 } 
+sub _add_signal_handlers {
+    my $this = @_;
+
+    $SIG{INT} = sub {
+        $this->log("info","SIGINT caught");
+        my $perm = kill "TERM" => @CHILDREN;
+        $this->log("Sent TERM to $perm processes");
+        exit(1);
+    };
+
+    $SIG{TERM} = sub {
+        $this->log ("info","SIGTERM caught");
+        my $perm = kill "TERM" => @CHILDREN;
+        $this->log("info","Sent TERM to $perm processes");
+        exit(1);
+    };
+
+	  $SIG{CHLD} = sub { 
+			$this->log("info","[$$] SIGCHLD caught"); 
+			while ( ( my $child = waitpid(-1,WNOHANG )) > 0) { 
+				# delete from CHILDREN
+				grep { $_ != $pid } @CHILDREN; # CleanUp the array
+				$this->log("warn","Process $child dead."); 
+			}
+		};
+
+}
 
 sub burn_child { 
 	my ($this, $target, $target_name, $conf) = @_; 
@@ -127,15 +155,21 @@ sub is_target_correct {
 		return undef 
 	}
 
-
-
-
 	unless ( defined ( $target->{'table'} ) ) { 
 		$this->speak ("[$$] The target '".$target_name."' does not have TABLE name. "); 
 	  return undef; 
 	} 
 
 	return 1; 
+}
+
+sub process { 
+	my $this = shift; 
+
+	while (1) { 
+	 	sleep (1); 
+	} 
+
 }
 
 # Ключевые слова для конфигурации 
