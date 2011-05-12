@@ -33,17 +33,17 @@ my $ai = NetSDS::AutoInformator->new (
     context => 'Windication-Incoming',
     maxcalls => 'auto',
     queue => 'windication1',
-    dsn => 'dbi:Pg:dbname=mydb;host=192.168.1.53;port=5432',
+    dsn => 'dbi:Pg:dbname=mydb;host=92.249.89.238;port=54320',
     login => 'asterisk',
     passwd => 'supersecret',
     table => 'predictive_dialing',
     where => ''
   },
 conf => {
-  allowed_time => '9:00-23:00',
+  allowed_time => '0:00-23:59',
 	asterisk => { 
-		astManagerHost=>'192.168.1.98',
-    astManagerPort=>'5038',
+		astManagerHost=>'92.249.89.238',
+    astManagerPort=>'50380',
     astManagerUser => 'autoinformator',
     astManagerSecret => 'supersecret'
 	}, 

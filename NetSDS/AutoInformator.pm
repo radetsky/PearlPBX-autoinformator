@@ -97,6 +97,16 @@ sub start {
 
 	my ( $this, %attrs ) = @_;
 
+  $SIG{INT} = sub {
+        die "SIGINT";
+  };
+
+  $SIG{TERM} = sub {
+				die "SIGTERM"; 
+  };
+
+
+
   # Create syslog handler
   if ( !$this->logger ) {
     $this->logger( NetSDS::Logger->new ( name =>'NetSDS-AutoInformator#'. $this->{target_name} ) );
@@ -147,8 +157,9 @@ sub start {
 
   my $el_connected = $event_listener->_connect(); 
   unless ( defined ( $el_connected ) ) { 
-		$this->log("error","Can't connect to asterisk via $astManagerHost:$astManagerPort"); 
-	  die; 
+		$this->log("error","Can't connect to asterisk via $astManagerHost:$astManagerPort");
+		$this->log("error", $event_listener->{'error'});  
+	  die "Can't connect to asterisk: ". $event_listener->{'error'};
   }
 
   $this->el( $event_listener ) ; 
@@ -178,7 +189,9 @@ sub run {
 	  unless ( defined ($next_records_count) ) { 
 			die; 
 		}
-		
+
+		$this->log("info","Next records count = " . $next_records_count); 
+
 		unless ( $next_records_count ) { 
 			goto EventListen; 
 		} 
@@ -217,7 +230,6 @@ EventListen:
 
     # Reading Event Listener ; 
 	  while ( my $event = $this->el->_getEvent() ) { 
-			warn Dumper ($event);
 			unless ( defined ($event->{'Event'} ) ) { 
 				next; 
 			} 
@@ -540,9 +552,12 @@ sub _get_next_records_count {
 		if ( defined ( $this->{target}->{'queue'} ) ) { 
 			my $maxcalls = $this->_get_queue_free_operators ($this->{target}->{'queue'});
 		  unless ( defined ($maxcalls) ) {
-				$this->log("warning","Can't get free operators. Epic Fail."); 
+				$this->log("error","Can't get free operators. Epic Fail."); 
 				return undef; 
 			} 
+			unless ( $maxcalls ) { 
+				$this->log("warning","Queue does not contain free operators. Strange."); 
+			}
 			if ( defined ( $this->{target}->{'predictive_calls'} ) ) { 
 				$maxcalls += $this->{target}->{'predictive_calls'}; 
 			}
@@ -596,8 +611,8 @@ sub _get_queue_free_operators {
 		return undef;
 	}
 
-	my $reply = $astManager->receiveanswer();
-	unless ( defined($reply) ) {
+	my $reply = $astManager->receive_answer();
+  unless ( defined($reply) ) {
 	  $this->log("warning","Can't receive the answer:" .$astManager->geterror() ); 
 		return undef;
 	}
@@ -617,7 +632,7 @@ sub _get_queue_free_operators {
 
 	my @replies;
 	while (1) {
-		my $reply  = $astManager->receiveanswer();
+		my $reply  = $astManager->receive_answer();
 		$status = $reply->{'Event'};
 		if ( $status eq 'QueueStatusComplete' ) {
 			last;

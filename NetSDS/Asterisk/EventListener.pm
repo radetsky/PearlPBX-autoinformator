@@ -104,7 +104,8 @@ sub _connect {
 
     $this->manager( $manager );
     my $res = $this->manager->connect();
-    unless ( defined ( $res ) ) { 
+    unless ( defined ( $res ) ) {
+			$this->{'error'} = $this->manager->geterror(); 
 		return undef; 
     }
     $this->connected(1);

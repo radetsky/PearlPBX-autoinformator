@@ -43,7 +43,7 @@ use NetSDS::Logger;
 use version; our $VERSION = "0.01";
 our @EXPORT_OK = qw();
 
-my @replies; 
+my @replies;
 
 #===============================================================================
 #
@@ -197,7 +197,6 @@ sub connect {
       $this->login( $this->{'username'}, $this->{'secret'}, $this->{'events'} );
 
     unless ( defined($login) ) {
-        $this->seterror("Can't login.");
         return undef;
     }
     return 1;
@@ -266,15 +265,14 @@ sub sendcommand {
 sub receive_answer {
     my $this = shift;
 
-	# Если в буфере что-то еще есть, отдаем оттуда.
-	
-	my $reply = shift @replies;
-	if ( defined ( $reply ) ) {
-		return $reply;
-	}
+# Если в буфере что-то еще есть, отдаем оттуда.
+
+    my $reply = shift @replies;
+    if ( defined($reply) ) {
+        return $reply;
+    }
 
     my $result = $this->read_raw();
- 
     unless ( defined($result) ) {
         unless ( ( $this->socket ) and ( $this->socket->connected ) ) {
             $result = $this->reconnect();
@@ -290,14 +288,14 @@ sub receive_answer {
         return 0;
     }
 
-   @replies = $this->reply_to_hash($result);
+    @replies = $this->reply_to_hash($result);
 
-    unless ( @replies ) {
+    unless (@replies) {
         $this->seterror("Reply to hash: error.");
         return undef;
     }
 
-    return shift @replies; 
+    return shift @replies;
 
 } ## end sub receiveanswer
 
@@ -310,6 +308,9 @@ sub receive_answer {
 sub read_raw {
     my $this = shift;
     my $one  = @_;
+    if ($one) {
+        return $this->socket->getline;
+    }
 
     unless ( $this->socket ) {
         $this->seterror("Read from closed socket.");
@@ -319,37 +320,45 @@ sub read_raw {
         $this->seterror("Read from disconnected socket.");
         return undef;
     }
-    unless ( $this->select->can_read(0.1) ) {
-        $this->seterror("Socket empty");
-        return 0;
-    }
-	my $data = '';
+
+    my $data = '';
+		my $force = 1; 
 
     while (1) {
-		my $buf='';
-		if ($one) { 
-			return $this->socket->getline; 
-		} 
-	    my $res = sysread($this->socket,$buf,1024);
-		unless ( defined ($res) ) {
-                $this->select->remove( $this->socket );
-                $this->seterror( sprintf( "Error while reading socket: %s\n", $! ) );
-                return undef;
- 		}
-        if ($res > 0) {
-                $data .= $buf;
+        unless ( $this->select->can_read($force) ) {
+            if ( $data eq '' )
+            { # Еще ничего не прочитано, то возвращаем ошибку.
+                return 0;
+            }
+            else {
+                return $data;
+            }
         }
-		if ($res < 1024) { #EOF
-			if ($buf =~ /\r\n$/sg) {
-				last;
-			}
-		}
-		if ($res >= 1024) {
-			next;
-		}
-    }    #### end while(1);
 
-
+        my $buf = '';
+        my $res = sysread( $this->socket, $buf, 1024 );
+        unless ( defined($res) ) {
+            $this->select->remove( $this->socket );
+            $this->seterror(
+                sprintf( "Error while reading socket: %s\n", $! ) );
+            return undef;
+        }
+        if ( $res > 0 ) {
+            $data .= $buf;
+        }
+        if ( $res < 1024 ) {    # Вычитали все, что было.
+					if ($buf =~ /\r\n\r\n$/) { 
+            last;
+					} else { 
+						# Форсированное чтение пока не получим \r\n в конце 
+						$force = 10; 
+						next;
+					}
+        }
+        if ( $res >= 1024 ) {
+            next;
+        }
+    }    #### end while (1);
     return $data;
 } ## end sub read_raw
 
@@ -389,6 +398,11 @@ sub login {
         last;
     }
 
+    if ( $reply == 0 ) {
+        $this->seterror("No answer from asterisk.");
+        return undef;
+    }
+
     my $status = $reply->{'Response'};
     unless ( defined($status) ) {
         $this->seterror( sprintf("Undefined Response.\n") );
@@ -400,7 +414,9 @@ sub login {
     }
     elsif ( $status eq 'Error' ) {
         $this->seterror(
-            sprintf( "Error while logging in. %s\n", $reply->{'Message'} ) );
+            sprintf( "Error while logging in. Reply messages was: %s\n",
+                $reply->{'Message'} )
+        );
         return undef;
     }
     else {
@@ -427,15 +443,15 @@ sub reply_to_hash {
     my ($reply) = @_;
     my ( $key, $val );
     my $answer;
-	my @arrEvents; 
+    my @arrEvents;
 
     my (@rows) = split( /\r\n/, $reply );
 
     foreach my $row (@rows) {
-		if ($row eq '') { 
-			push @arrEvents,$answer; 
-			$answer = undef; 
-		} 
+        if ( $row eq '' ) {
+            push @arrEvents, $answer;
+            $answer = undef;
+        }
 
         if ($row) {
             if ( $row =~ m/\n/ ) {
@@ -454,8 +470,8 @@ sub reply_to_hash {
             }
         }
     }
-	push @arrEvents,$answer; 
-    return @arrEvents; ;
+    push @arrEvents, $answer;
+    return @arrEvents;
 } ## end sub reply_to_hash
 
 sub command_reply_to_hash {

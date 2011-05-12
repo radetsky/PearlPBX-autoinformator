@@ -46,6 +46,8 @@ use base 'NetSDS::App';
 use Data::Dumper;
 use NetSDS::AutoInformator; 
 
+use POSIX ":sys_wait_h";
+
 # Start 
 # У нас есть N целей. Для каждой из них надо создать свой процесс. 
 # Master-Process остается в режиме ожидания. 
@@ -74,25 +76,20 @@ sub _add_signal_handlers {
     my $this = @_;
 
     $SIG{INT} = sub {
-        $this->log("info","SIGINT caught");
         my $perm = kill "TERM" => @CHILDREN;
-        $this->log("Sent TERM to $perm processes");
-        exit(1);
+        die "SIGINT";
     };
 
     $SIG{TERM} = sub {
-        $this->log ("info","SIGTERM caught");
         my $perm = kill "TERM" => @CHILDREN;
-        $this->log("info","Sent TERM to $perm processes");
-        exit(1);
+				die "SIGTERM"; 
     };
 
-	  $SIG{CHLD} = sub { 
-			$this->log("info","[$$] SIGCHLD caught"); 
+	  $SIG{CHLD} = sub {
 			while ( ( my $child = waitpid(-1,WNOHANG )) > 0) { 
-				# delete from CHILDREN
-				grep { $_ != $pid } @CHILDREN; # CleanUp the array
-				$this->log("warn","Process $child dead."); 
+				grep { $_ != $child } @CHILDREN; # CleanUp the array
+				my $perm = kill "TERM" => @CHILDREN;
+				die "$child was died : $!\n"; 
 			}
 		};
 
@@ -110,7 +107,7 @@ sub burn_child {
 		# This is a child. 
 		my $ai = NetSDS::AutoInformator->new (
 			target => $target, 
-			tname => $target_name, 
+			target_name => $target_name, 
 			conf => $conf
 		);
 
@@ -171,85 +168,6 @@ sub process {
 	} 
 
 }
-
-# Ключевые слова для конфигурации 
-# 1. Максимальное количество параллельных звонков ( для автооповещения ). 
-# Варианты: 1. auto (если используется возврат в очередь) 
-#           2. обсолютное значение от 1 до 10000. 
-# 2. Маршрутизация звонков ( несмотря на то, что мы можем зароутить звонки через 
-# локальный интерфейс Local/ и отправить по локальной маршрутизации, которая прописана 
-#  в астериске - тут есть проблемы, связанные со скоростью обработки таких звонков через
-# Asterisk Manager. Так что лучше по старинке - собственными средствами. 
-# Для этого вводится таблица марштутизации с номерами CallerID и маршрутами, которые надо подставлять. 
-# Пример: 
-# <050> 
-# callerid=0504139380
-# trunk=SIP/MTS
-# </050> 
-# Вопрос по ситуации в ПлюсБанке, а как же группа пиров типа GSM/Шлюз ?
-# Значит надо прописать группу trunk-ов c количеством возможных параллельных звонков по разным транкам
-# <trunkgroup1>
-# SIP/GSM1 = 1 
-# SIP/GSM2 = 2
-# SIP/MTS = 5 
-# </trunkgroup1> 
-# И в таком случае вмето транка, прописываем транкгруппу 
-# <050> 
-# callerid=0504139380 
-# trunkgroup=trunkgroup1 
-# </050>
-# Так же еще надо прописать максимальное количество используемых каналов для каждого транка, даже если он не входит 
-# в группу: 
-# <trunk> 
-# SIP/MTS=5 
-# SIP/GSM1=1 
-# SIP/GSM2=2 
-# </trunk> 
-# Соответственно в памяти ведем подсчет используемых каналов и не нарываемся на лишнее. 
-# Функция поиска свободного канала сводится к перебору по схеме "цикл от начала до конца" 
-# ------------------------------------
-# 3. Пункт конфигурации - ЦЕЛИ! 
-# Именно по Цели VoiceInformer знает откуда и по каким условиям брать списки звонков 
-# И куда отправлять звонки 
-# <targets> 
-# <windication1>
-# context=Windication-Incoming 
-# maxcalls = auto
-# queue = windication1
-# dsn=db:asterisk
-# table=predictive 
-# where=userfield like 'GROUP=1%' order by id desc 
-# </windication1>
-# <dyatel> 
-# context=WyDolzhnyDeneg
-# maxcalls=10
-# dsn=db:bankas 
-# table=dolgi 
-# where=order by priority 
-# </dyatel> 
-# <pora_na_rabotu>
-# maxcalls=120
-# context=Attention_Avaria
-# dsn=db:work
-# table=smena 
-# where=
-# </pora_na_rabotu>
-
-# </targets> 
-
-# Запуск процесса производится просто /opt/NetSDS/bin/NetSDS-VoiceInformer.pl
-# Если в конфигурации прописано 5 целей (пять!), то главный процесс должен запустить пять
-# потомков, с параметрами доступа к базам и астериску. Они сами будут отслеживать наличие данных 
-# в своих источниках и писать логи/отчеты/делать паузу в звонках. 
-# Занятость каналов между собой отслеживать через SHARED MEMORY. 
-
-# По окончанию рабочего процесса (некому больше звонить,  в лог должен быть выведен отчет 
-# КОЛИЧЕСТВО СОВЕРШЕННЫХ ЗВОНКОВ (попытки)  
-# НАЧАЛО РАБОТЫ СЕАНСА (дата/время)
-# КОНЕЦ РАБОТЫ СЕАНСА (дата/время)
-# ДОЗВОНИЛИСЬ (количество раз) 
-# НЕ ДОЗВОНИЛИСЬ (количество раз) 
-
 
 1;
 #===============================================================================
