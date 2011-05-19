@@ -240,7 +240,7 @@ EventListen:
 				  $ch =~ s/\/$dst//g; 
 					$this->_dec_bt($ch);
 					$this->log("info","Dial to $dst failed.");
-					$this->_dial_failure( $dst ); 
+					$this->_dial_failure ( $dst ); 
 				}
 				if ($event->{'Response'} =~ /Success/i ) { 
 					my ($trunkname,$trunk_id) = split('-',$event->{'Channel'}); 
@@ -298,21 +298,23 @@ sub _fire {
 	my $this = shift; 
 	my $record = shift; 
 	
-	my $destination = str_trim( $record->{'destination'} ); 
+	my $destination = str_trim( $record->{'destination'} );
+	my $userfield = str_trim( $record->{'userfield'} );
+  
 	my $id  = $record->{'id'};
 	my $context = $this->{'target'}->{'context'}; 
 	unless ( defined ( $context ) ) { 
 		$context = 'default'; 
 	} 
-
- 	my $channel = $this->_find_channel($record->{'destination'}); 
+  
+	my $channel_variables = $this->_join_variables_from_userfield ($userfield,$id); 
+ 	
+	my $channel = $this->_find_channel($record->{'destination'}); 
   unless ( defined ( $channel ) ) { 
 		$this->log("info","No free channel available for $destination. Skip it."); 
 		return undef; 
 	}
   
-	warn Dumper ($channel); 
-
 	my $callerid = $channel->{'callerid'}; 
 	my $trunkname = $channel->{'trunkname'}; 
 
@@ -328,7 +330,7 @@ sub _fire {
             destination    => $destination,
             callerid       => $callerid,
             return_context => $context,
-            variables      => '',
+            variables      => $channel_variables,
             channel        => $trunkname.'/'.$destination);
   
   # Set Asterisk Parameters
@@ -350,7 +352,22 @@ sub _fire {
 
   return 1; 
 }
+=item B<_join_variables_from_userfield>
 
+changes & to | and add ID as channel variable 
+
+=cut 
+
+sub _join_variables_from_userfield { 
+	my $this = shift; 
+	my $userfield = shift; 
+  my $id = shift; 
+
+	$userfield =~ s/&/|/g; 
+  $userfield .= '|ID='.$id; 
+
+  return $userfield; 
+}
 =item B<_dec_busy_trunks> 
 
   dec busy_trunks->trunk_name,1; 
@@ -511,7 +528,7 @@ sub _get_next_records {
  
   my $strTable = $this->{'target'}->{'table'}; 
 
-  my $strSelect = "select id, destination"; 
+  my $strSelect = "select id, destination, userfield"; 
 	my $strQuery  = $strSelect . " from " . $strTable . " where done_date is null and (since < now() and till > now() ) and tries < $maxtries "; 
  
   if ( defined ( $strWhere ) and $strWhere ne '') { 

@@ -1,0 +1,19 @@
+context callback-connect {
+    _X. => {
+        NoOp("MONIKERID=${MONIKERID}");
+        NoOp("GROUPNUM=${GROUPNUM}");
+        NoOp("ID=${ID}");
+        QUEUENAME="predictive${GROUPNUM}";
+        AGI(uuid.pl);
+        NoOp(UUID=${UUID});
+        Set(MONITOR_FILENAME=${STRFTIME(${EPOCH},,%Y%m%d)}_${UUID});
+        Set(TIMEOUT(absolute)=3600);
+        Set(CHANNEL(language)=ru);
+        Set(CDR(userfield)="CALLBACK-CANCEL,${UUID}");
+        Set(CALLERID(num)=${EXTEN});
+        Set(CALLERID(name)=CALLBACK);
+        MixMonitor(${MONITOR_FILENAME}.wav,b);
+        Queue(${QUEUENAME},,,,,predictive_confirm_call.sh|${EXTEN}|${MONIKERID}|${UUID}|${ID});
+    }
+}
+
