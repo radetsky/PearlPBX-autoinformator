@@ -201,7 +201,7 @@ sub run {
 	  # От максимального количества отнимаем то, что прямой сейчас звонит. 
 	
 	  if ( defined ($this->{'dialed'} ) ) { 
-			my $current_active_calls = keys @{ $this->{'dialed'} }; 
+			my $current_active_calls = keys %{ $this->{'dialed'} }; 
 			$next_records_count = $next_records_count - $current_active_calls; 
 			$this->log('info',"next_record_count ($next_records_count) - $current_active_calls"); 
 		}
@@ -216,13 +216,19 @@ sub run {
 			$this->log("info","No data."); 
 			goto EventListen; 
 		} 
-	  foreach my $record ( @{$prepared_records} ) { 
+	  foreach my $record ( @{$prepared_records} ) {
+		  	my $dest = str_trim($record->{'destination'}); 
+		  	if ( defined ( $this->{'dialed'}->{$dest} ) ) { 
+				$this->log("info","Will not make call ".$record->{'id'}.":".$record->{'destination'}. "because it's dialing now"); 
+				next;
+			}
+
 			$this->log("info","Make call to ".$record->{'id'}.":".$record->{'destination'}."\n"); 
 
-      my $dialed = $this->_fire($record);
+      			my $dialed = $this->_fire($record);
 			if ( $dialed ) {
 			  # Заносим в анналы, что туда в destination мы звоним прямо сейчас.
-				$this->{'dialed'}->{str_trim($record->{'destination'})} = $record->{'id'};
+				$this->{'dialed'}->{$dest} = $record->{'id'};
 			} 
     }
 
@@ -240,13 +246,13 @@ EventListen:
 				  $ch =~ s/\/$dst//g; 
 					$this->_dec_bt($ch);
 					$this->log("info","Dial to $dst failed.");
-					$this->_dial_failure ( $dst ); 
+					$this->_dial_failure ( str_trim($dst) ); 
 				}
 				if ($event->{'Response'} =~ /Success/i ) { 
 					my ($trunkname,$trunk_id) = split('-',$event->{'Channel'}); 
 				  $this->_dec_bt($trunkname); 
 				  $this->log("info","Dial to $dst success."); 
-					$this->_dial_success ( $dst ); 
+					$this->_dial_success ( str_trim($dst) ); 
 				} 
 
 			} 
@@ -413,10 +419,11 @@ trunk - это просто транк, который мы выбираем д�
 sub _find_channel { 
 	my ($this,$destination) = @_; 
 
-  my $routing = $this->{'conf'}->{'routing'};
+        my $routing = $this->{'conf'}->{'routing'};
 	my $prefix = undef; 
 
-	foreach my $mask ( keys %{ $routing } ) { 
+	foreach my $mask ( sort keys %{ $routing } ) {
+		#warn "Destination: $destination, mask=$mask";
 		if ($destination =~ /^$mask/ ) { 
 			$prefix = $mask; 
 			last;
@@ -431,11 +438,11 @@ sub _find_channel {
 		$callerid = ""; 
 	} 
 	$this->log('info', "Selected route: ".$prefix. " with callerid=\'$callerid\'");  
-  my $trunkname = $this->_find_correspondent_trunk ($routing->{$prefix}); 
-  unless ( defined ($trunkname) ) { 
+        my $trunkname = $this->_find_correspondent_trunk ($routing->{$prefix}); 
+        unless ( defined ($trunkname) ) { 
 		return undef; 
 	} 
-  return { callerid => $callerid, trunkname => $trunkname }; 
+        return { callerid => $callerid, trunkname => $trunkname }; 
 }
 
 sub _find_correspondent_trunk { 
@@ -448,32 +455,32 @@ sub _find_correspondent_trunk {
 			$this->log('warning',"Can't find maxchannels for trunk $trunkname. Using maxchannels=1."); 
 			$trunkmaxchannels = 1; 
 		} 
-    my $busy_trunks = 0; 
+                my $busy_trunks = 0; 
 		unless ( defined ( $this->{'busy_trunks'}->{$trunkname} ) ) { 
 			$busy_trunks = 0; 
 		} else { 
 			$busy_trunks = $this->{'busy_trunks'}->{$trunkname};
 		} 
 		if ($busy_trunks >= $trunkmaxchannels ) { 
-			$this->log("info","Trunk $trunkname filled for maximum."); 
+			$this->log("info","Trunk $trunkname filled for maximum. Search next"); 
 			return undef; 
 		} 
 		$busy_trunks = $busy_trunks + 1; 
-    $this->{'busy_trunks'}->{$trunkname} = $busy_trunks;
+                $this->{'busy_trunks'}->{$trunkname} = $busy_trunks;
 	 	$this->log("info","Selecting $trunkname. Incrementing busy_trunks to $busy_trunks."); 
-	  return $trunkname; 	
+	        return $trunkname; 	
  	}
  
 	if ( defined ( $prefix->{'trunkgroup'} ) ) {
 	  my $trunkgroupname = $prefix->{'trunkgroup'}; 
-  	if ( defined ( $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname} ) ) { 
-			foreach my $trunkname ( keys %{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}} ) {  	
-		    my $trunkmaxchannels = $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}->{$trunkname}; 
+  	if ( defined ( $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname} ) ) {
+			foreach my $trunkname ( sort keys %{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}} ) {  	
+		                my $trunkmaxchannels = $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}->{$trunkname}; 
 				unless ( defined ( $trunkmaxchannels ) or $trunkmaxchannels ) { 
 					$trunkmaxchannels = 1; 
-					$this->log('warning',"Can't find maxchannels for trunk $trunkname in trunkgroup $trunkgroupname. Using maxchannels=1.");
+					$this->log('warning',"Can't find maxchannels for trunk $trunkname in $trunkgroupname. Using maxchannels=1.");
 				}
-		    my $busy_trunks = 0; 
+		                my $busy_trunks = 0; 
 				unless ( defined ( $this->{'busy_trunks'}->{$trunkname} ) ) { 
 					$busy_trunks = 0; 
 				} else { 
@@ -482,9 +489,9 @@ sub _find_correspondent_trunk {
 				if ($busy_trunks >= $trunkmaxchannels ) { 
 					next; 
 				} else {
-					$this->log("info","Selecting $trunkname in trunkgroup $trunkgroupname. Incrementing busy_trunks to $busy_trunks."); 
 					$busy_trunks = $busy_trunks + 1; 
-    			$this->{'busy_trunks'}->{$trunkname} = $busy_trunks;
+    			                $this->{'busy_trunks'}->{$trunkname} = $busy_trunks;
+					$this->log("info","Selecting $trunkname in trunkgroup $trunkgroupname. Incremented busy_trunks to $busy_trunks."); 
 					return $trunkname;  
 				}
 			}

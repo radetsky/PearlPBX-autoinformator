@@ -1,7 +1,14 @@
+22.05.11
+Some bugs fixed. 
+
+
 19.05.11 
 
 Added functionality to send channel variables from userfield. 
 userfield in DB must contain 'var1=val1&var2=val2' et cetera. 
 In the channel variables we will have var1,var2,etc. 
+
+
+
 
 
