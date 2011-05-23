@@ -201,9 +201,14 @@ sub run {
 	  # От максимального количества отнимаем то, что прямой сейчас звонит. 
 	
 	  if ( defined ($this->{'dialed'} ) ) { 
-			my $current_active_calls = keys %{ $this->{'dialed'} }; 
+			my $current_active_calls = keys %{ $this->{'dialed'} };
+			$this->log('info',"Current active calls: $current_active_calls"); 
+			foreach my $d ( keys %{ $this->{'dialed'} } ) { 
+				$this->log('info','Current destination: ' . $d ); 
+			} 
+			my $old_next_records_count = $next_records_count; 
 			$next_records_count = $next_records_count - $current_active_calls; 
-			$this->log('info',"next_record_count ($next_records_count) - $current_active_calls"); 
+			$this->log('info',"next_record_count = $old_next_records_count - $current_active_calls = $next_records_count"); 
 		}
 
 		# Prepared record is the arrayref of records as hashref
@@ -383,9 +388,20 @@ sub _join_variables_from_userfield {
 sub _dec_bt { 
 	my $this = shift; 
 	my $trunkname = shift; 
+	my $busy_trunks = 0; 
 
-	my $busy_trunks = $this->{'busy_trunks'}->{$trunkname}; 
-  $busy_trunks = $busy_trunks - 1; 
+	if ( defined ( $this->{'busy_trunks'}->{$trunkname} ) ) { 
+		$busy_trunks = $this->{'busy_trunks'}->{$trunkname};
+	} 
+	
+  	$busy_trunks = $busy_trunks - 1;
+	if ($busy_trunks < 0) { 
+		# Такое бывает, если каналы использует не только Катюша. 
+		# Плюс после перезапуска Катюши остаточные явления в виде OriginateResponse&
+		# Так что тут все нормально. 
+		$busy_trunks = 0; 
+	} 
+
 	$this->{'busy_trunks'}->{$trunkname} = $busy_trunks; 
 	$this->log( "info", "Decrease $trunkname busy_trunks to $busy_trunks"); 
   return 1; 
@@ -448,6 +464,11 @@ sub _find_channel {
 sub _find_correspondent_trunk { 
 	my ($this,$prefix) = @_; 
 
+#
+# Trunk routing 
+#
+
+
   if ( defined ( $prefix->{'trunk'} ) ) { 
 		my $trunkname = $prefix->{'trunk'}; 
 		my $trunkmaxchannels = $this->{'conf'}->{'trunk'}->{$trunkname}; 
@@ -462,7 +483,7 @@ sub _find_correspondent_trunk {
 			$busy_trunks = $this->{'busy_trunks'}->{$trunkname};
 		} 
 		if ($busy_trunks >= $trunkmaxchannels ) { 
-			$this->log("info","Trunk $trunkname filled for maximum. Search next"); 
+			$this->log("info","Trunk $trunkname filled for maximum."); 
 			return undef; 
 		} 
 		$busy_trunks = $busy_trunks + 1; 
@@ -470,11 +491,17 @@ sub _find_correspondent_trunk {
 	 	$this->log("info","Selecting $trunkname. Incrementing busy_trunks to $busy_trunks."); 
 	        return $trunkname; 	
  	}
- 
+	#
+	# TrungGroup routing 
+	#
 	if ( defined ( $prefix->{'trunkgroup'} ) ) {
 	  my $trunkgroupname = $prefix->{'trunkgroup'}; 
   	if ( defined ( $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname} ) ) {
-			foreach my $trunkname ( sort keys %{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}} ) {  	
+			# Выбираем случайным образом канал из транкгруппы. 
+			my @trunkchannels = $this->_hashkeys_to_array (%{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}}); 
+			for (my $i = 0; $i <=  keys %{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}}; $i++) { 
+				my $trunkname = $this->_get_random_key (@trunkchannels); 
+				#foreach my $trunkname ( sort keys %{$this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}} ) {  	
 		                my $trunkmaxchannels = $this->{'conf'}->{'trunkgroup'}->{$trunkgroupname}->{$trunkname}; 
 				unless ( defined ( $trunkmaxchannels ) or $trunkmaxchannels ) { 
 					$trunkmaxchannels = 1; 
@@ -541,7 +568,7 @@ sub _get_next_records {
   if ( defined ( $strWhere ) and $strWhere ne '') { 
 		$strQuery .= "and " . $strWhere;
 	} 
-  $strQuery .= "order by tries desc "; 
+  $strQuery .= "order by tries "; 
   $strQuery .= $strLimit; 
 
   my $data = $this->dbh->fetch_call($strQuery); 
@@ -738,7 +765,24 @@ sub log {
   return undef;
 }    ## sub log
 
+sub _get_random_key { 
+	my $this = shift; 
+	my @a = @_; 
 
+	my $r = int (rand (@a)); 
+	return $a[$r]; 
+}
+
+sub _hashkeys_to_array { 
+	my $this = shift; 
+	my %hkeys = @_; 
+	my @a = (); 
+
+	foreach my $key (sort keys %hkeys) {
+		push @a,$key; 
+	}
+	return @a; 
+}
 1;
 
 __END__
