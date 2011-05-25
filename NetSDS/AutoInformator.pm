@@ -144,8 +144,8 @@ sub start {
   # Set Asterisk Parameters
   my $astManagerHost   = $this->{conf}->{'asterisk'}->{'astManagerHost'};
   my $astManagerPort   = $this->{conf}->{'asterisk'}->{'astManagerPort'};
-  my $astManagerUser   = $this->{conf}->{'asterisk'}->{'astManagerUser'};
-  my $astManagerSecret = $this->{conf}->{'asterisk'}->{'astManagerSecret'};  
+  my $astManagerUser   = $this->{conf}->{'asterisk'}->{'evtManagerUser'};
+  my $astManagerSecret = $this->{conf}->{'asterisk'}->{'evtManagerSecret'};  
 
   # Set Event Listener
   my $event_listener = NetSDS::Asterisk::EventListener->new(
@@ -177,7 +177,10 @@ sub start {
 sub run { 
   my $this = shift; 
   while (1) {
-		$this->log("info", "Begin cycle"); 
+    $this->log("info", "Begin cycle");
+
+BeginPoller:
+
     my $is_allowed_time = $this->_is_allowed_time();  
 	  unless ( defined ( $is_allowed_time) ) { 
 			sleep(5);
@@ -186,7 +189,7 @@ sub run {
 
     # Now it's allowed. Let's find parameters of target and get next N records; 
     my $next_records_count = $this->_get_next_records_count(); 
-	  unless ( defined ($next_records_count) ) { 
+	unless ( defined ($next_records_count) ) { 
 			die; 
 		}
 
@@ -240,7 +243,8 @@ sub run {
 EventListen: 
 
     # Reading Event Listener ; 
-	  while ( my $event = $this->el->_getEvent() ) { 
+	  while ( my $event = $this->el->_getEvent() ) {
+		  	$this->log("info","Reading event from asterisk."); 
 			unless ( defined ($event->{'Event'} ) ) { 
 				next; 
 			} 
@@ -248,21 +252,21 @@ EventListen:
 				my $dst = $event->{'ActionID'}; 
 				if ($event->{'Response'} =~ /Failure/i ) { 
 					my $ch = $event->{'Channel'}; 
-				  $ch =~ s/\/$dst//g; 
+				  	$ch =~ s/\/$dst//g; 
 					$this->_dec_bt($ch);
 					$this->log("info","Dial to $dst failed.");
 					$this->_dial_failure ( str_trim($dst) ); 
 				}
 				if ($event->{'Response'} =~ /Success/i ) { 
-					my ($trunkname,$trunk_id) = split('-',$event->{'Channel'}); 
+				  my ($trunkname,$trunk_id) = split('-',$event->{'Channel'}); 
 				  $this->_dec_bt($trunkname); 
 				  $this->log("info","Dial to $dst success."); 
-					$this->_dial_success ( str_trim($dst) ); 
+				  $this->_dial_success ( str_trim($dst) ); 
 				} 
-
+				#goto BeginPoller; 
 			} 
 		}
-		sleep(1); 
+		#sleep(1); 
 	  $this->log("info", "End of cycle"); 
   }
 	return 1; 
@@ -563,7 +567,7 @@ sub _get_next_records {
   my $strTable = $this->{'target'}->{'table'}; 
 
   my $strSelect = "select id, destination, userfield"; 
-	my $strQuery  = $strSelect . " from " . $strTable . " where done_date is null and (since < now() and till > now() ) and tries < $maxtries "; 
+	my $strQuery  = $strSelect . " from " . $strTable . " where done_date is null and (since < now() and till > now() ) and tries < $maxtries and destination ~ E\'^\\\\d+\\\\s+' "; 
  
   if ( defined ( $strWhere ) and $strWhere ne '') { 
 		$strQuery .= "and " . $strWhere;
@@ -602,12 +606,16 @@ sub _get_next_records_count {
 	if ($this->{target}->{'maxcalls'} =~ /auto/i ) { 
 		if ( defined ( $this->{target}->{'queue'} ) ) { 
 			my $maxcalls = $this->_get_queue_free_operators ($this->{target}->{'queue'});
-		  unless ( defined ($maxcalls) ) {
+			unless ( defined ($maxcalls) ) {
 				$this->log("error","Can't get free operators. Epic Fail."); 
 				return undef; 
+			}
+			if ($maxcalls < 0) { 
+				$this->log("info","Queue is empty. Do not call."); 
+				return 0; 
 			} 
-			unless ( $maxcalls ) { 
-				$this->log("warning","Queue does not contain free operators. Strange."); 
+			if ( $maxcalls == 0 ) { 
+				$this->log("info","Queue does not contain free operators. Let's call predivtive."); 
 			}
 			if ( defined ( $this->{target}->{'predictive_calls'} ) ) { 
 				$maxcalls += $this->{target}->{'predictive_calls'}; 
@@ -693,10 +701,12 @@ sub _get_queue_free_operators {
 
   # warn Dumper (\@replies);
 
-  my $free_operators = 0; 
+  my $free_operators = 0; # Free Operators
+  my $queue_operators = 0;  # Вообще посчитаем кол-во операторов 
   foreach my $reply (@replies) { 
 		if ($reply->{'Event'} =~ /QueueMember/) {
 			if ($reply->{'Queue'} eq $queuename) { 
+				$queue_operators = $queue_operators + 1; 
 				if ($reply->{'Status'} == 1) { 
 					$free_operators = $free_operators + 1; 
 				}
@@ -704,7 +714,11 @@ sub _get_queue_free_operators {
 		}
   }
 
-	return $free_operators; 
+  if (($free_operators == 0) and ($queue_operators == 0) ) { 
+  	return -1;  # Empty Queue 
+  }
+
+  return $free_operators; 
 	
 } 
 

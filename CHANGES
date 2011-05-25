@@ -1,3 +1,9 @@
+25.05.11
+Уменьшил время ожидания на сокете для EventListener. 
+Стало слегка пошустрее. 
+Для  разных коннектов к астериску добавил переменные evtManagerUser, evtManagerSecret в конфиге. 
+
+
 23.05.11 
 Some bugs fixed. 
 Changed way to find free trunk un trunkgroup to more effective. 

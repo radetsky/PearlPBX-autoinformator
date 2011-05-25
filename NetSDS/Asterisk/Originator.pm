@@ -123,6 +123,7 @@ sub originate {
 	              Async   => 'On',
        	              Channel => $channel,
                       Exten   => $destination,
+		      Timeout => 30000,
                       Context => $return_context,
                       CallerID => $callerid,
                       Variable => $variables,
@@ -135,6 +136,7 @@ sub originate {
        		 	Channel => $channel,
        		 	Exten   => $destination, 
        	 		Context => $return_context,
+			Timeout => 30000, 
         		CallerID => $callerid,
         		Variable => $variables, 
         	); 

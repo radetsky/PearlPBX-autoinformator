@@ -322,7 +322,7 @@ sub read_raw {
     }
 
     my $data = '';
-		my $force = 1; 
+    my $force = 0.2; 
 
     while (1) {
         unless ( $this->select->can_read($force) ) {
@@ -405,7 +405,7 @@ sub login {
 
     my $status = $reply->{'Response'};
     unless ( defined($status) ) {
-        $this->seterror( sprintf("Undefined Response.\n") );
+        $this->seterror( sprintf("Undefined Response: ".Dumper($reply)."\n") );
         return undef;
     }
 
