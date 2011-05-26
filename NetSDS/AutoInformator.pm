@@ -258,7 +258,14 @@ EventListen:
 					$this->_dial_failure ( str_trim($dst) ); 
 				}
 				if ($event->{'Response'} =~ /Success/i ) { 
-				  my ($trunkname,$trunk_id) = split('-',$event->{'Channel'}); 
+				  my $trunkname = undef; 
+				  my (@trunkinfo) = split ('-',$event->{'Channel'}); 
+					if (@trunkinfo > 2) { 
+						pop @trunkinfo; 
+						$trunkname = join ('-',@trunkinfo); 
+					} else { 
+						$trunkname = shift @trunkinfo; 
+					} 
 				  $this->_dec_bt($trunkname); 
 				  $this->log("info","Dial to $dst success."); 
 				  $this->_dial_success ( str_trim($dst) ); 
@@ -378,7 +385,9 @@ sub _join_variables_from_userfield {
 	my $userfield = shift; 
   my $id = shift; 
 
-	$userfield =~ s/&/|/g; 
+  if ( defined ( $userfield ) ) { 
+		$userfield =~ s/&/|/g; 
+	}
   $userfield .= '|ID='.$id; 
 
   return $userfield; 
