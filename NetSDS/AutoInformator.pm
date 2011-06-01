@@ -251,11 +251,18 @@ EventListen:
 			if ($event->{'Event'} =~ /OriginateResponse/i ) { 
 				my $dst = $event->{'ActionID'}; 
 				if ($event->{'Response'} =~ /Failure/i ) { 
-					my $ch = $event->{'Channel'}; 
-				  	$ch =~ s/\/$dst//g; 
+					my $ch = $event->{'Channel'};
+					my $cause = $event->{'Reason'}; 
+				  $ch =~ s/\/$dst//g; 
 					$this->_dec_bt($ch);
-					$this->log("info","Dial to $dst failed.");
+					$this->log("info","Dial to $dst failed cause $cause");
 					$this->_dial_failure ( str_trim($dst) ); 
+					if ( ( $cause == 5 ) or ($cause == 3)  ) { # User busy. User not answered. 
+						$this->log("info","User busy or do not answer.");
+					} else {
+						$this->log("warning","Some error occured while asterisk tries to dial to destination $dst");
+						$this->_dec_tries($dst);
+					}
 				}
 				if ($event->{'Response'} =~ /Success/i ) { 
 				  my $trunkname = undef; 
@@ -556,6 +563,22 @@ sub _increment_tries {
 	return 1; 
 }
 
+sub _dec_tries { 
+	my $this = shift; 
+	my $dst = shift; 
+  my $id = undef; 
+
+  if ( defined ( $this->{'dialed'}->{$dst} ) ) { 
+    $id = $this->{'dialed'}->{$dst};
+		my $table = $this->{'target'}->{'table'};
+	  my $strQuery = "update $table set tries=tries-1 where id=$id"; 
+		$this->dbh->call($strQuery); 
+	} else { 
+		$this->log("warning","Error: $dst does not exist in 'dialed' destinations.");
+	}
+
+
+}
 
 =item B<_get_next_records> 
 
