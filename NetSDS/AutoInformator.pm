@@ -257,7 +257,7 @@ EventListen:
 					$this->_dec_bt($ch);
 					$this->log("info","Dial to $dst failed cause $cause");
 					$this->_dial_failure ( str_trim($dst) ); 
-					if ( ( $cause == 5 ) or ($cause == 3)  ) { # User busy. User not answered. 
+					if ( ( $cause == 5 ) or ($cause == 3)  ) { # User busy = 5. User not answered = 3. 
 						$this->log("info","User busy or do not answer.");
 					} else {
 						$this->log("warning","Some error occured while asterisk tries to dial to destination $dst");
@@ -723,7 +723,13 @@ sub _get_queue_free_operators {
 
 	my @replies;
 	while (1) {
-		my $reply  = $astManager->receive_answer();
+		my $reply = $astManager->receive_answer();
+		unless ( defined ( $reply ) ) { 
+			next; 
+		} 
+		unless ( $reply ) { 
+			next; 
+		} 
 		$status = $reply->{'Event'};
 		if ( $status eq 'QueueStatusComplete' ) {
 			last;
