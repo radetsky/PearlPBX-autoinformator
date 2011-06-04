@@ -225,15 +225,16 @@ BeginPoller:
 			goto EventListen; 
 		} 
 	  foreach my $record ( @{$prepared_records} ) {
-		  	my $dest = str_trim($record->{'destination'}); 
+		  	my $dest = str_trim($record->{'destination'});
+				$record->{'destination'} = $dest; # Trimmed 
 		  	if ( defined ( $this->{'dialed'}->{$dest} ) ) { 
-				$this->log("info","Will not make call ".$record->{'id'}.":".$record->{'destination'}. "because it's dialing now"); 
-				next;
-			}
+				    $this->log("info","Will not make call ".$record->{'id'}.":".$record->{'destination'}. " because it's dialing now"); 
+				    next;
+			  }
 
 			$this->log("info","Make call to ".$record->{'id'}.":".$record->{'destination'}."\n"); 
 
-      			my $dialed = $this->_fire($record);
+      my $dialed = $this->_fire($record);
 			if ( $dialed ) {
 			  # Заносим в анналы, что туда в destination мы звоним прямо сейчас.
 				$this->{'dialed'}->{$dest} = $record->{'id'};
@@ -249,20 +250,20 @@ EventListen:
 				next; 
 			} 
 			if ($event->{'Event'} =~ /OriginateResponse/i ) { 
-				my $dst = $event->{'ActionID'}; 
+				my $dst = str_trim($event->{'ActionID'});
 				if ($event->{'Response'} =~ /Failure/i ) { 
 					my $ch = $event->{'Channel'};
 					my $cause = $event->{'Reason'}; 
 				  $ch =~ s/\/$dst//g; 
 					$this->_dec_bt($ch);
 					$this->log("info","Dial to $dst failed cause $cause");
-					$this->_dial_failure ( str_trim($dst) ); 
 					if ( ( $cause == 5 ) or ($cause == 3)  ) { # User busy = 5. User not answered = 3. 
 						$this->log("info","User busy or do not answer.");
 					} else {
 						$this->log("warning","Some error occured while asterisk tries to dial to destination $dst");
 						$this->_dec_tries($dst);
 					}
+					$this->_dial_failure ($dst);
 				}
 				if ($event->{'Response'} =~ /Success/i ) { 
 				  my $trunkname = undef; 
@@ -275,7 +276,7 @@ EventListen:
 					} 
 				  $this->_dec_bt($trunkname); 
 				  $this->log("info","Dial to $dst success."); 
-				  $this->_dial_success ( str_trim($dst) ); 
+				  $this->_dial_success ($dst); 
 				} 
 				#goto BeginPoller; 
 			} 
