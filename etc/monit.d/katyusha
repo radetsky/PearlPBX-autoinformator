@@ -1,0 +1,6 @@
+check process katyusha with pidfile /var/run/NetSDS/NetSDS-VoiceInformer.pid
+	group lan
+	group netsds
+	start program = "/sbin/service katyusha start"
+	stop  program = "/sbin/service katyusha stop"
+	if 5 restarts with 5 cycles then timeout

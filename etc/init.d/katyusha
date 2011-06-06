@@ -1,0 +1,62 @@
+#!/bin/sh
+#
+# Do not load RH compatibility interface.
+WITHOUT_RC_COMPAT=1
+
+# Source function library.
+. /etc/init.d/functions
+
+PIDFILE=/var/run/NetSDS/NetSDS-VoiceInformer.pid
+LOCKFILE=/var/lock/subsys/NetSDS-VoiceInformer
+RETVAL=0
+
+start()
+{
+        cd /opt/NetSDS/bin
+        ./NetSDS-VoiceInformer.pl --daemon
+        RETVAL=$?
+        return $RETVAL
+}
+
+stop()
+{
+        kill -TERM `cat $PIDFILE`
+        RETVAL=$?
+        return $RETVAL
+}
+
+restart()
+{
+        stop
+        start
+}
+
+reload()
+{
+        stop
+        start
+} 
+
+# See how we were called.
+case "$1" in
+        start)
+                start
+                ;;
+        stop)
+                stop
+                ;;
+        restart)
+                restart
+                ;;
+        status)
+                status --pidfile "$PIDFILE" katyusha
+                RETVAL=$?
+                ;;
+        *)
+                msg_usage "${0##*/} {start|stop|restart|status}"
+                RETVAL=1
+esac
+
+exit $RETVAL
+
+
