@@ -1,3 +1,6 @@
+23.06.11 
+Исправлено некоторое количество ошибок. Вырезан из тела Катюши perl-NetSDS-Asterisk.
+
 01.06.11
 Производится обработка причины неудачи дозвона (OriginateResponse->Reason). 
 Если пользователь BUSY или NO ANSWER, то количество попыток увеличивается.
@@ -8,18 +11,14 @@
 Стало слегка пошустрее. 
 Для  разных коннектов к астериску добавил переменные evtManagerUser, evtManagerSecret в конфиге. 
 
-
 23.05.11 
 Some bugs fixed. 
 Changed way to find free trunk un trunkgroup to more effective. 
 
-
 22.05.11
 Some bugs fixed. 
 
-
 19.05.11 
-
 Added functionality to send channel variables from userfield. 
 userfield in DB must contain 'var1=val1&var2=val2' et cetera. 
 In the channel variables we will have var1,var2,etc. 
