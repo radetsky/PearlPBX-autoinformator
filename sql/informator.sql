@@ -18,7 +18,7 @@ SET default_with_oids = false;
 -- Name: predictive_dialing; Type: TABLE; Schema: public; Owner: asterisk; Tablespace: 
 --
 
-CREATE TABLE predictive_dialing (
+CREATE TABLE voiceinformer (
     id bigint NOT NULL,
     destination character(15) NOT NULL,
     create_date timestamp without time zone DEFAULT now(),

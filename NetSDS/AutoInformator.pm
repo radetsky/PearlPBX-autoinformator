@@ -193,7 +193,9 @@ sub run {
 
 
    while (1) {
-        $this->log( "info", "Begin cycle" );
+	if ($this->{debug}) { 
+        	$this->log( "info", "Begin cycle" );
+	}
 
       BeginPoller:
 
@@ -216,7 +218,7 @@ sub run {
         }
 
 # We have next_records_count of next_records to make parallel calls.
-# От максимального количества отнимаем то, что прямой сейчас звонит.
+# От максимального количества отнимаем то, что прямо сейчас звонит.
 
         if ( defined( $this->{'dialed'} ) ) {
             $current_active_calls = keys %{ $this->{'dialed'} };
@@ -271,7 +273,9 @@ sub run {
 
         # Reading Event Listener ;
         while ( my $event = $this->el->_getEvent() ) {
-            $this->log( "info", "Reading event from asterisk." );
+	    if ($this->{debug} ) { 
+            	$this->log( "info", "Reading event from asterisk." );
+	    }
             unless ( defined( $event->{'Event'} ) ) {
                 next;
             }
@@ -332,6 +336,13 @@ sub _dial_success {
     my $destination = shift;
 
     my $id = $this->{'dialed'}->{$destination};
+
+    unless ( defined ( $id ) ) {
+            #$this->log( "info",
+            #"My memory does not contain dialed -> $destination." );
+            #$this->log( "info", "$destination may be in other processes." );
+        return undef;
+    }
 
     my $table    = $this->{'target'}->{'table'};
     my $strQuery = "update $table set done_date=now() where id=$id";
@@ -840,7 +851,9 @@ sub _get_queue_free_operators {
     foreach my $reply (@replies) {
         if ( $reply->{'Event'} =~ /QueueMember/ ) {
             if ( $reply->{'Queue'} eq $queuename ) {
-                $queue_operators = $queue_operators + 1;
+								if ($reply->{'Status'} != 5 ) { 
+                	$queue_operators = $queue_operators + 1;
+								}
                 if ( $reply->{'Status'} == 1 ) {
                     $free_operators = $free_operators + 1;
                 }
@@ -941,7 +954,13 @@ sub _hashkeys_to_array {
 sub cdr { 
     my ($this, $dst, $cause) = @_; 
 
-    my $cdr = $this->{'prepared_cdr'}->{$dst}; 
+    my $cdr = $this->{'prepared_cdr'}->{$dst};
+    unless ( defined ( $cdr ) ) { 
+	    return undef; 
+    }
+    
+    # warn Dumper $cdr; 
+
     my $disposition = 'FAILED '.$cause;
 
     $disposition = "NO ANSWER" if $cause == 3; 
@@ -949,8 +968,7 @@ sub cdr {
 
     my $sql = "insert into public.cdr (src,dst,dcontext,channel,duration,billsec,disposition,userfield) \
     values (?,?,?,?,?,?,?,?)"; 
-    my $sth = $this->dbh->prepare ($sql); 
-    eval { $sth->execute (  $cdr->{'src'}, 
+    my $sth = $this->dbh->call ($sql, $cdr->{'src'}, 
                             $cdr->{'dst'}, 
                             $cdr->{'dcontext'}, 
                             $cdr->{'channel'},
@@ -958,12 +976,7 @@ sub cdr {
                             $cdr->{'billsec'},
                             $disposition,
                             $cdr->{'userfield'}
-                         ); }; 
-    if ($@) { 
-        $this->log("warning","Can't insert CDR! Failed try will not be visible in CDR!");
-    } else { 
-        $this->dbh->commit; 
-    } 
+                         ); 
     delete $this->{'prepared_cdr'}->{$dst}; 
     return 1; 
 }
