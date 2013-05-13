@@ -136,6 +136,9 @@ sub process {
                 printf ("OriginateResponse: %s, %s, %s \n", $event->{'Response'}, $event->{'Exten'}, $event->{'Channel'} ); 
                 if ($event->{'Response'} !~ /Success/ ) { 
                     delete $this->{originated}->{$actionId}; 
+
+                    my ($target_name,$dest,$cid) = split (',', $actionId ); 
+                    $this->_originate_next_record($target_name); 
                     next; 
                 }
                 # my ($c1,$c2) = split (';',$event->{'Channel'});  # Запомнили до hangup
@@ -149,16 +152,21 @@ sub process {
             $this->_masquerade ($event); 
         }
         if ( $event->{'Event'} =~ /^Hangup$/ ) { 
-            #warn Dumper ($event); 
             if ( $event->{'Channel'} =~ /ZOMBIE/ ) { next; }
-            my $originated = $this->_is_my_hangup($event); 
-            #warn Dumper ($originated); 
+            my $originated = $this->_hangup($event); 
             if ($originated) { 
                 printf("Hangup: %s, %s \n", $event->{'Cause'}, $event->{'Channel'}); 
-                $this->_success ($originated);
-                my ($target_name,$dest) = split (',',$originated->{'actionId'} ); 
+                if ($event->{'Cause'} != 16 ) { 
+                    $this->_failure ( $originated );    
+                } else { 
+                    $this->_success ( $originated );
+                }
+                my ($target_name,$dest,$cid) = split (',',$originated->{'actionId'} ); 
                 $this->_originate_next_record($target_name); 
-            } # end if 
+            } # end if  
+            else { 
+                warn "------ Lost call: ".$event->{'Channel'}; 
+            }
         } # end if 
     } # end while 
 } # end sub 
@@ -170,6 +178,19 @@ sub _originate_next_record {
     unless ( $this->_originate(@list) ) { 
         $this->finalize(); 
     }
+}
+
+sub _failure { 
+    my ( $this, $originated ) = @_; 
+
+    my ($target,$dest,$cid) = split (',',$originated->{'actionId'} ); 
+
+    print "Failed call. Target: $target, destination: $dest \n";
+
+    my $actionId = $originated->{'actionId'}; 
+    delete $this->{originated}->{$actionId}; 
+
+    return 1; 
 }
 
 sub _success { 
@@ -188,7 +209,7 @@ sub _success {
 sub _update_success { 
     my ($this, $originated) = @_; 
 
-    my ($target,$dest) = split (',',$originated->{'actionId'} ); 
+    my ($target,$dest,$cid) = split (',',$originated->{'actionId'} ); 
 
     my $seconds = $originated->{'stop'} - $originated->{'start'};
     print "Update success. Target: $target, destination: $dest, billsec: $seconds \n";
@@ -218,7 +239,7 @@ sub _originate {
 		my $userfield   = $call->{'userfield'}; 
         my $context     = $call->{'context'}; 
         my $ocontext    = $call->{'ocontext'}; 
-        my $actionId    = join (',', ( $call->{'target_name'}, $call->{'destination'} ) ); 
+        my $actionId    = join (',', ( $call->{'target_name'}, $call->{'destination'},$call->{'id'} ) ); 
         # print Dumper ($actionId); 
         my $variables = $this->_join_variables_from_userfield( $userfield, $id );
         my $channel = "Local/".$destination."@".$ocontext;
@@ -679,10 +700,13 @@ sub _is_my_call {
     return 1; 
 }
 
-sub _is_my_hangup { 
+sub _hangup { 
     my ($this, $event) = @_; 
 
+    #warn Dumper ($event); 
+
     my $channel = $event->{'Channel'}; 
+    warn Dumper ($channel, $this->{originated}); 
 
     foreach my $actionId ( keys %{$this->{originated}} ) {
         my $originated = $this->{originated}->{$actionId}; 
@@ -690,6 +714,7 @@ sub _is_my_hangup {
             next; 
         }
 
+        #warn Dumper ( $originated->{'channel'} ); 
         if ( $channel =~ /$originated->{'channel'}/ ) { 
             return $originated; 
         }
@@ -710,7 +735,7 @@ sub _masquerade {
         unless ( defined ( $originated->{'channel'} ) ) { 
             next; 
         }
-        if ( $original =~ /$originated->{'channel'}/ ) { 
+        if ( $original eq $originated->{'channel'} ) { 
             $this->{'originated'}->{$actionId}->{'channel'} = $clone; 
             return $originated; 
         }
