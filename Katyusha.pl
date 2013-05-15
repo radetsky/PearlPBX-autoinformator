@@ -74,7 +74,7 @@ sub start {
 	# Create syslog handler
     if ( !$this->logger ) {
         $this->logger ( NetSDS::Logger->new( name => 'katyusha' ) );
-        $this->log( "info", "Logger started!" );
+        $this->log( "info", "Katyusha v.4.0 started!" );
     }
 	$this->_add_signal_handlers(); 
 	
@@ -84,7 +84,9 @@ sub start {
 	foreach my $target_name ( keys %{ $this->{conf}->{'targets'} } ) {  
 		 my $target = $this->{conf}->{'targets'}->{$target_name};
 
+         $this->log("info", "Reading target: $target_name" );
          if ( $this->{debug} ) { print "Reading target: $target_name.\n"; } 
+
 		 
          # Check the target for all correct parameters
 		 my $is_target_correct = $this->is_target_correct($target, $target_name); 
@@ -133,7 +135,11 @@ sub process {
 
             if ( $this->_is_my_call($event) ) {
                 my $actionId = $event->{'ActionID'}; 
-                printf ("OriginateResponse: %s, %s, %s \n", $event->{'Response'}, $event->{'Exten'}, $event->{'Channel'} ); 
+                if ( $this->{debug} ) { 
+                    printf ("OriginateResponse: %s, %s, %s \n", $event->{'Response'}, $event->{'Exten'}, $event->{'Channel'} ); 
+                } 
+                $this->log("info",sprintf("OriginateResponse: %s, %s, %s \n", $event->{'Response'}, $event->{'Exten'}, $event->{'Channel'}));
+
                 if ($event->{'Response'} !~ /Success/ ) { 
                     delete $this->{originated}->{$actionId}; 
 
@@ -155,7 +161,11 @@ sub process {
             if ( $event->{'Channel'} =~ /ZOMBIE/ ) { next; }
             my $originated = $this->_hangup($event); 
             if ($originated) { 
-                printf("Hangup: %s, %s \n", $event->{'Cause'}, $event->{'Channel'}); 
+                if ( $this->{debug} ) { 
+                    printf("Hangup: %s, %s \n", $event->{'Cause'}, $event->{'Channel'}); 
+                } 
+                $this->log("info",sprintf("Hangup: %s, %s", $event->{'Cause'}, $event->{'Channel'}));
+
                 if ($event->{'Cause'} != 16 ) { 
                     $this->_failure ( $originated );    
                 } else { 
@@ -164,9 +174,9 @@ sub process {
                 my ($target_name,$dest,$cid) = split (',',$originated->{'actionId'} ); 
                 $this->_originate_next_record($target_name); 
             } # end if  
-            else { 
-                warn "------ Lost call: ".$event->{'Channel'}; 
-            }
+            #else { 
+            #    warn "------ Lost call: ".$event->{'Channel'}; 
+            #}
         } # end if 
     } # end while 
 } # end sub 
@@ -175,9 +185,7 @@ sub _originate_next_record {
     my ($this,$target_name) = @_; 
 
     my @list = $this->_get_calls( $this->{conf}->{targets}->{$target_name}, 1, $target_name ); 
-    unless ( $this->_originate(@list) ) { 
-        $this->finalize(); 
-    }
+    $this->_originate(@list);
 }
 
 sub _failure { 
@@ -211,9 +219,32 @@ sub _update_success {
 
     my ($target,$dest,$cid) = split (',',$originated->{'actionId'} ); 
 
-    my $seconds = $originated->{'stop'} - $originated->{'start'};
-    print "Update success. Target: $target, destination: $dest, billsec: $seconds \n";
-    
+    my $seconds = 0; 
+
+    unless ( defined ( $originated->{'stop'} ) ) { 
+        if ($this->{debug} ) { 
+            warn "Undefined originated->stop for ".$originated->{'actionId'}; 
+        }
+        $this->log("info", "Undefined originated->stop for ".$originated->{'actionId'});
+        $seconds = 0;
+    }
+    unless ( defined ( $originated->{'start'} ) ) { 
+        if ($this->{debug} ) { 
+            warn "Undefined originated->start for ".$originated->{'actionId'}; 
+        }
+        $this->log("info", "Undefined originated->start for ".$originated->{'actionId'});
+        $seconds = 0; 
+    }
+
+    if ( defined ( $originated->{'stop'} ) and defined ( $originated->{'start'} ) ) {
+        $seconds = $originated->{'stop'} - $originated->{'start'};
+    }
+
+    if ( $this->{debug} ) {
+        print "Update success. Target: $target, destination: $dest, billsec: $seconds \n";
+    }
+    $this->log("info","Update success. Target: $target, destination: $dest, billsec: $seconds");
+
     my $table = $this->{conf}->{targets}->{$target}->{'table'}; 
     my $id = $originated->{'id'}; 
 
@@ -273,6 +304,12 @@ sub _originate {
             return undef;
         }
 
+        unless ( $reply ) { # returned; No data from socket. 
+            $this->log("error", "No data from Manager while try to originate call to $destination.");
+            if ($this->{debug} ) { warn  "No data from Manager while try to originate call to $destination."; } 
+            return undef; 
+        }
+
         my $status = $reply->{'Response'};
         unless ( defined($status) ) {
             $this->log( "warning", "Answer does not contain 'Response' field." );
@@ -288,6 +325,7 @@ sub _originate {
 
         # А тут должен быть удачный ответ. 
         # warn Dumper ($reply); 
+        $this->log("info",sprintf( "%s: %s, %s", $reply->{'Response'}, $reply->{'Message'}, $reply->{'ActionID'}));
         if ( $this->{debug} ) { 
             printf("%s: %s, %s\n", $reply->{'Response'}, $reply->{'Message'}, $reply->{'ActionID'}); 
         }
@@ -357,7 +395,7 @@ sub _get_calls {
 
     my $data_count = @{$data};
     if ( $this->{debug} ) { print " ======== $data_count records for [ $target_name ] ======== \n"; }
-    $this->log( "info", "Got $data_count records for $target_name " );
+    $this->log( "info", " ======== $data_count records for [ $target_name ] ======== " );
 
     # print Dumper (\@newdata); 
     return @newdata; 
@@ -664,6 +702,8 @@ sub _increment_tries {
     my $table = $this->{conf}->{targets}->{$target_name}->{'table'};
 
     if ( $this->{debug} ) { print "Increment tries for $id:$dest in table $table\n"; }
+    $this->log("info","Increment tries for $id:$dest in table $table");
+
     my $strQuery =
       "update $table set when_last_try=now(), tries=tries+1 where id=$id";
 
@@ -706,7 +746,7 @@ sub _hangup {
     #warn Dumper ($event); 
 
     my $channel = $event->{'Channel'}; 
-    warn Dumper ($channel, $this->{originated}); 
+    # warn Dumper ($channel, $this->{originated}); 
 
     foreach my $actionId ( keys %{$this->{originated}} ) {
         my $originated = $this->{originated}->{$actionId}; 
@@ -730,6 +770,8 @@ sub _masquerade {
     if ($this->{debug} ) { 
         printf ("Masquerade %s -> %s\n", $original, $clone); 
     }
+    $this->log("info",sprintf("Masquerade %s -> %s\n", $original, $clone));
+
     foreach my $actionId ( keys %{$this->{originated}} ) {
         my $originated = $this->{originated}->{$actionId}; 
         unless ( defined ( $originated->{'channel'} ) ) { 
