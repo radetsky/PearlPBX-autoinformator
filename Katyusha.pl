@@ -38,6 +38,7 @@ Katyusha->run(
 
 package Katyusha;
 
+use lib './lib'; 
 use lib '/Users/rad/git/perl-NetSDS/NetSDS/lib'; 
 use lib '/Users/rad/git/perl-NetSDS-Util/NetSDS-Util/lib/'; 
 use lib '/opt/NetSDS/lib';
@@ -122,6 +123,21 @@ sub process {
     # просто брать следующий звонок из очереди для указанной цели!!! 
 
     while ( 1 ) { 
+        my $time = time; 
+        if ( defined ( $this->{'qtimestamp'} ) ) { 
+            my $diff = $time - $this->{'qtimestamp'}; 
+            if ( $diff >= 30 ) { 
+                $this->_get_queue_status();
+                        # Вычислить кол-во необходимого для запуска. 
+                        # В случае, когда работает меньше чем положено. 
+
+                my @newlist = $this->_new_call_list(); 
+                if (@newlist) { $this->_originate(@newlist); } 
+
+            }
+        }
+
+
         my $event = $this->{el}->_getEvent();
         next unless ( $event ); 
         next unless ( defined( $event->{'Event'}) );
@@ -171,8 +187,16 @@ sub process {
                 } else { 
                     $this->_success ( $originated );
                 }
-                my ($target_name,$dest,$cid) = split (',',$originated->{'actionId'} ); 
-                $this->_originate_next_record($target_name); 
+                
+
+                my ($target_name,$dest,$cid) = split (',',$originated->{'actionId'} );
+                my $target = $this->{conf}->{'targets'}->{$target_name}; 
+                my $count_of_calls = $this->_get_count_of_calls($target, $target_name);
+                my $active_calls = $this->_get_active_calls ($target_name); 
+
+                if ($active_calls < $count_of_calls ) { 
+                    $this->_originate_next_record($target_name); 
+                }
             } # end if  
             #else { 
             #    warn "------ Lost call: ".$event->{'Channel'}; 
@@ -275,7 +299,8 @@ sub _originate {
         my $variables = $this->_join_variables_from_userfield( $userfield, $id );
         my $channel = "Local/".$destination."@".$ocontext;
 
-        my $originated = { 'id' => $id, 'actionId' => $actionId, 'channel' => $channel }; 
+        my $originated = { 'id' => $id, 'actionId' => $actionId, 
+                           'channel' => $channel, 'target_name' => $call->{'target_name'} }; 
 
         # Update table for current try;
         $this->_increment_tries($call);
@@ -336,6 +361,36 @@ sub _originate {
     return 1;
 }
 
+=item B<_new_call_list> 
+
+    Создает список звонков, которые необходимо добавить к текущим. 
+    Работает в случае, если текущее кол-во активных звонков менее чем возможно. 
+    Зачастую в случае увеличения кол-ва рабочих/свободных операторов. 
+    А что будет в случае уменьшения ? Для проверки уменьшения мы проверяем статусы звонков 
+    по факту получения Hangup(16).
+
+=cut 
+
+sub _new_call_list { 
+    my $this = shift; 
+
+    my @list;
+    my @calls_list; 
+
+    foreach my $target_name ( keys %{ $this->{conf}->{'targets'} } ) {  
+        my $target = $this->{conf}->{'targets'}->{$target_name};
+        my $count_of_calls = $this->_get_count_of_calls($target, $target_name);
+        my $active_calls = $this->_get_active_calls ($target_name); 
+        
+        if ( $count_of_calls > $active_calls ) { 
+            my $limit = $count_of_calls - $active_calls; 
+            @calls_list  = $this->_get_calls($target, $limit, $target_name); 
+        }
+        push @list, @calls_list; 
+    }
+    return @list; 
+
+}
 
 =item B<_create_calls_list>
 
@@ -353,8 +408,7 @@ sub _create_calls_list {
 	foreach my $target_name ( keys %{ $this->{conf}->{'targets'} } ) {  
 		 my $target = $this->{conf}->{'targets'}->{$target_name};
 		 my $count_of_calls = $this->_get_count_of_calls($target, $target_name);
-         # Здесь мы остановились. 
-
+    
 		 my @list = $this->_get_calls($target, $count_of_calls, $target_name);
 		 push @calls_list,@list; 
 	}
@@ -413,8 +467,10 @@ sub _get_count_of_calls {
 			my $free_operators = $this->_get_free_operators( $target->{'queue'} );
 			if ( $free_operators < 0 ) { 
 				$this->log ("error", "Queue ".$target->{'queue'}." is empty. Do not call."); 
-                print "Queue ".$target->{'queue'}." is empty. Do not call.\n"; 
-			}
+                if ( $this->{debug} ) { 
+                    print "Queue ".$target->{'queue'}." is empty. Do not call.\n"; 
+			    }
+            }
 			if ( $free_operators == 0 ) { 
 				$this->log ("info", "Queue".$target->{'queue'}. " is busy. But let's call predictive."); 
 			    print "Queue ".$target->{'queue'}. " is busy. But let's call predictive.\n";
@@ -423,11 +479,18 @@ sub _get_count_of_calls {
 			if ( $free_operators >= 0 ) { 
 				if ( $target->{'predictive_calls'} ) { 
 					$count_of_calls = $free_operators + $target->{'predictive_calls'}; 
-                    print "Count of calls ($count_of_calls) = free operators ($free_operators) + predictive (". 
-                        $target->{'predictive_calls'}. ")\n";
+                    $this->log("info", "Count of calls ($count_of_calls) = free operators ($free_operators) + predictive (". 
+                        $target->{'predictive_calls'}. ")"); 
+                    if ( $this->{debug} ) { 
+                        print "Count of calls ($count_of_calls) = free operators ($free_operators) + predictive (". 
+                            $target->{'predictive_calls'}. ")\n";
+                    }
 				}
 			}
-            print "_get_count_of_calls() returns $count_of_calls \n";
+            #if ( $this->{debug} ) {  
+            #    print " -- Count of predictive calls [ $target_name ]: $count_of_calls \n";
+            #}
+            #$this->log('info'," -- Count of predictive calls [ $target_name ]: $count_of_calls"); 
 			return $count_of_calls; 
 		}
 	}
@@ -466,6 +529,20 @@ sub _get_free_operators {
 sub _get_queue_status { 
 	my ($this) = @_; 
 
+    if ( defined ( $this->{'qtimestamp'} ) ) { 
+        my $time = time; 
+        my $diff = $time - $this->{'qtimestamp'}; 
+        if ( $diff < 30 ) { 
+            return 1; 
+        }
+    }
+
+    if ( $this->{debug} ) { 
+        print "+++ Getting QueueStatus +++\n"; 
+    }
+
+    $this->log('info',"+++ Getting QueueStatus +++"); 
+
 	unless ( $this->{manager_connected} ) { 
 		 unless ( $this->_manager_connect() ) {  
 			$this->log("error","Can't connect to manager."); 
@@ -485,6 +562,12 @@ sub _get_queue_status {
         $this->log( "warning",
             "Can't receive the answer:" . $this->{manager}->geterror() );
         return undef;
+    }
+
+    unless ( $reply ) { 
+        warn "No data from Manager while try to get QueueStatus."; 
+        $this->log("error", "No data from Manager while try to get QueueStatus."); 
+        return undef; 
     }
 
     my $status = $reply->{'Response'};
@@ -514,6 +597,8 @@ sub _get_queue_status {
         push @replies, $reply;
     }
 
+    undef $this->{'queuemembers'}; 
+
     # warn Dumper (\@replies);
     foreach my $reply (@replies) {
         if ( $reply->{'Event'} =~ /QueueMember/ ) {
@@ -522,6 +607,7 @@ sub _get_queue_status {
         		$this->{'queuemembers'}->{$queuename}->{'free_operators'} = 0; 
         		$this->{'queuemembers'}->{$queuename}->{'queue_operators'} = 0; 
           	}
+
 			if ($reply->{'Status'} != 5 ) { 
                 $this->{'queuemembers'}->{$queuename}->{'queue_operators'} += 1;	
                 # $queue_operators = $queue_operators + 1;
@@ -532,6 +618,7 @@ sub _get_queue_status {
             }
         }
     }
+    $this->{'qtimestamp'} = time; 
 
 }
 
@@ -782,8 +869,24 @@ sub _masquerade {
             return $originated; 
         }
     }
-
 }
+
+sub _get_active_calls { 
+    my ($this, $target_name) = @_; 
+
+    my $a = 0; 
+
+    foreach my $actionId ( keys %{$this->{originated}} ) {
+        my $originated = $this->{originated}->{$actionId}; 
+        my $tname = $originated->{'target_name'}; 
+        if ($tname eq $target_name) { 
+            $a += 1; 
+        }        
+    }
+
+    return $a; 
+}
+
 
 1;
 #===============================================================================
